@@ -1,0 +1,6 @@
+Flask
+pandas
+numpy
+openpyxl
+calamine
+gunicorn

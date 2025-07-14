@@ -1,0 +1,1 @@
+输入：.\ngrok.exe http 5000

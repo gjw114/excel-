@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>周度销售数据对比分析工具 (Web版)</title>
+    <!-- 使用CDN引入Bootstrap 5 CSS，美化界面 -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { padding: 20px; background-color: #f8f9fa; }
+        .card { box-shadow: 0 2px 4px rgba(0,0,0,.1); }
+        .table-container { margin-top: 15px; max-height: 400px; overflow-y: auto; }
+        #status-bar { font-weight: bold; min-height: 50px; }
+        .file-label {
+            display: block;
+            margin-top: 5px;
+            font-style: italic;
+            color: #6c757d;
+            height: 1.2em;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1 class="mb-4 text-center">周度销售数据对比分析工具</h1>
+
+        <!-- 1. 文件选择区 -->
+        <div class="card mb-4">
+            <div class="card-header fw-bold">1. 文件选择</div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-4 mb-3">
+                        <label for="sales_order_file" class="form-label">SZJ-销售订单.xlsx</label>
+                        <input class="form-control" type="file" id="sales_order_file">
+                        <span id="sales_order_label" class="file-label"></span>
+                    </div>
+                    <div class="col-md-4 mb-3">
+                        <label for="multi_price_file" class="form-label">多形态价格.xlsx</label>
+                        <input class="form-control" type="file" id="multi_price_file">
+                        <span id="multi_price_label" class="file-label"></span>
+                    </div>
+                    <div class="col-md-4 mb-3">
+                        <label for="manager_map_file" class="form-label">区域经理表.xlsx</label>
+                        <input class="form-control" type="file" id="manager_map_file">
+                        <span id="manager_map_label" class="file-label"></span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 2. 操作按钮区 -->
+        <div class="card mb-4">
+            <div class="card-header fw-bold">2. 执行与保存</div>
+            <div class="card-body">
+                <div class="d-flex flex-wrap gap-2">
+                    <button id="process-btn" class="btn btn-primary flex-grow-1" disabled>请选择所有文件</button>
+                    <button id="save-btn" class="btn btn-success flex-grow-1" disabled>保存处理结果</button>
+                    <button id="history-btn" class="btn btn-info flex-grow-1" data-bs-toggle="modal" data-bs-target="#historyModal">查看历史明细</button>
+                </div>
+                <div id="status-bar" class="mt-3"></div>
+            </div>
+        </div>
+       
+        <!-- 3. 结果展示区 -->
+        <div class="row">
+            <div class="col-lg-6 mb-4">
+                <div class="card h-100">
+                    <div class="card-header fw-bold">上周汇总结果</div>
+                    <div class="card-body">
+                        <div id="last-week-table" class="table-responsive table-container"><p class="text-muted">加载中...</p></div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-lg-6 mb-4">
+                <div class="card h-100">
+                    <div class="card-header fw-bold">本周汇总结果</div>
+                    <div class="card-body">
+                        <div id="this-week-table" class="table-responsive table-container"><p class="text-muted">加载中...</p></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 历史记录 Modal 弹窗 -->
+    <div class="modal fade" id="historyModal" tabindex="-1">
+        <div class="modal-dialog modal-xl">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">历史处理记录</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label for="month-selector" class="form-label">选择月份:</label>
+                        <select id="month-selector" class="form-select"></select>
+                    </div>
+                    <div id="history-table" class="table-responsive"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 使用CDN引入 Bootstrap 5 JS and Popper.js -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    
+    <script>
+        // ★★★ 这里不需要再手动配置URL！★★★
+        // 它会自动使用当前页面的主机名，所以无论本地访问还是通过Ngrok访问都能正常工作。
+        const BACKEND_URL = window.location.origin;
+
+        // 获取页面元素
+        const processBtn = document.getElementById('process-btn');
+        const saveBtn = document.getElementById('save-btn');
+        const historyBtn = document.getElementById('history-btn');
+        const statusBar = document.getElementById('status-bar');
+        const fileInputs = {
+            sales_order: document.getElementById('sales_order_file'),
+            multi_price: document.getElementById('multi_price_file'),
+            manager_map: document.getElementById('manager_map_file')
+        };
+        const monthSelector = document.getElementById('month-selector');
+
+        let currentRunData = null; 
+        let statusInterval = null;
+
+        // --- 函数定义 ---
+
+        function updateFileLabel(inputId) {
+            const fileInput = fileInputs[inputId];
+            const fileLabel = document.getElementById(`${inputId}_label`);
+            fileLabel.textContent = fileInput.files.length > 0 ? fileInput.files[0].name : '';
+            checkFilesReady();
+        }
+
+        function checkFilesReady() {
+            const allFilesSelected = Object.values(fileInputs).every(input => input.files.length > 0);
+            processBtn.disabled = !allFilesSelected;
+            processBtn.textContent = allFilesSelected ? '开始处理' : '请选择所有文件';
+        }
+
+        function renderTable(elementId, jsonString) {
+            const container = document.getElementById(elementId);
+            try {
+                const jsonData = JSON.parse(jsonString);
+                if (!jsonData || !jsonData.columns || jsonData.data.length === 0) {
+                    container.innerHTML = '<p class="text-muted">没有数据可供显示。</p>';
+                    return;
+                }
+                let table = '<table class="table table-striped table-bordered table-sm">';
+                table += `<thead><tr>${jsonData.columns.map(col => `<th>${col}</th>`).join('')}</tr></thead>`;
+                table += `<tbody>${jsonData.data.map(row => `<tr>${row.map(cell => `<td>${cell}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
+                container.innerHTML = table;
+            } catch (error) {
+                container.innerHTML = '<p class="text-danger">数据格式错误，无法渲染表格。</p>';
+            }
+        }
+        
+        async function fetchData(url, options = {}) {
+            try {
+                const response = await fetch(url, options);
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
+                }
+                return response;
+            } catch (error) {
+                console.error('Fetch error:', error);
+                throw error;
+            }
+        }
+        
+        async function loadSummary(weekType, elementId) {
+            try {
+                const response = await fetchData(`${BACKEND_URL}/api/summary?week=${weekType}`);
+                const data = await response.text();
+                renderTable(elementId, data);
+            } catch (error) {
+                document.getElementById(elementId).innerHTML = `<div class="alert alert-danger">加载失败: ${error.message}</div>`;
+            }
+        }
+        
+        async function startProcessing() {
+            processBtn.disabled = true;
+            processBtn.textContent = '正在上传文件...';
+            statusBar.innerHTML = '<div class="alert alert-info">正在上传文件，请稍候...</div>';
+            saveBtn.disabled = true;
+            currentRunData = null;
+
+            const formData = new FormData();
+            formData.append('sales_order', fileInputs.sales_order.files[0]);
+            formData.append('multi_price', fileInputs.multi_price.files[0]);
+            formData.append('manager_map', fileInputs.manager_map.files[0]);
+            
+            try {
+                const response = await fetchData(`${BACKEND_URL}/api/process`, { method: 'POST', body: formData });
+                const data = await response.json();
+                const jobId = data.job_id;
+                processBtn.textContent = '正在处理数据...';
+                statusBar.innerHTML = `<div class="alert alert-info">处理任务已启动...</div>`;
+                statusInterval = setInterval(() => checkJobStatus(jobId), 2000);
+            } catch(error) {
+                processBtn.disabled = false;
+                processBtn.textContent = '再次处理';
+                statusBar.innerHTML = `<div class="alert alert-danger">处理错误: ${error.message}</div>`;
+                checkFilesReady();
+            }
+        }
+        
+        async function checkJobStatus(jobId) {
+            try {
+                const response = await fetchData(`${BACKEND_URL}/api/status/${jobId}`);
+                const data = await response.json();
+                if (data.status === 'completed') {
+                    clearInterval(statusInterval);
+                    statusBar.innerHTML = '<div class="alert alert-success">处理成功！可以保存结果了。</div>';
+                    saveBtn.disabled = false;
+                    currentRunData = JSON.parse(data.result);
+                } else if (data.status === 'failed') {
+                    throw new Error(data.error || "后端处理失败");
+                }
+            } catch(error) {
+                clearInterval(statusInterval);
+                statusBar.innerHTML = `<div class="alert alert-danger">状态查询失败: ${error.message}</div>`;
+            } finally {
+                processBtn.textContent = '再次处理';
+                checkFilesReady();
+            }
+        }
+        
+        async function saveResult() {
+            if (!currentRunData) { alert("没有可供保存的新处理结果。"); return; }
+            saveBtn.disabled = true;
+            saveBtn.textContent = "正在保存...";
+            
+            try {
+                // 后端需要的是 { 'result': DataFrame的JSON字符串 }
+                const payload = { result: JSON.stringify(currentRunData) };
+                await fetchData(`${BACKEND_URL}/api/save`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) });
+                alert('保存成功！本周汇总视图已更新。');
+                currentRunData = null;
+                saveBtn.textContent = "保存处理结果";
+                loadSummary('this_week', 'this-week-table');
+            } catch (error) {
+                saveBtn.disabled = false;
+                saveBtn.textContent = "保存处理结果";
+                alert(`保存失败: ${error.message}`);
+            }
+        }
+        
+        async function loadHistoryMonths() {
+            monthSelector.innerHTML = '<option>正在加载...</option>';
+             try {
+                const response = await fetchData(`${BACKEND_URL}/api/history/months`);
+                const months = await response.json();
+                monthSelector.innerHTML = months.length > 0 ? months.map(m => `<option value="${m}">${m}</option>`).join('') : '<option value="">无历史记录</option>';
+                if(months.length > 0) loadHistoryData();
+            } catch (error) {
+                 monthSelector.innerHTML = `<option>${error.message}</option>`;
+            }
+        }
+        
+        async function loadHistoryData() {
+            const selectedMonth = monthSelector.value;
+            const tableContainer = document.getElementById('history-table');
+            if (!selectedMonth) { tableContainer.innerHTML = ''; return; }
+            tableContainer.innerHTML = '<p>正在加载数据...</p>';
+            try {
+                 const response = await fetchData(`${BACKEND_URL}/api/history/data?month=${selectedMonth}`);
+                 const data = await response.text();
+                 renderTable('history-table', data);
+            } catch (error) {
+                 tableContainer.innerHTML = `<div class="alert alert-danger">${error.message}</div>`;
+            }
+        }
+
+        // --- 事件绑定 ---
+        processBtn.addEventListener('click', startProcessing);
+        saveBtn.addEventListener('click', saveResult);
+        historyBtn.addEventListener('click', loadHistoryMonths);
+        monthSelector.addEventListener('change', loadHistoryData);
+
+        // 为所有文件输入框绑定事件
+        Object.keys(fileInputs).forEach(key => {
+            fileInputs[key].addEventListener('change', () => updateFileLabel(key));
+        });
+        
+        // --- 页面初始化 ---
+        document.addEventListener('DOMContentLoaded', () => {
+            loadSummary('last_week', 'last-week-table');
+            loadSummary('this_week', 'this-week-table');
+            checkFilesReady();
+        });
+    </script>
+</body>
+</html>
